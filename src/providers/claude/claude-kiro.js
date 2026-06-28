@@ -65,6 +65,9 @@ const KIRO_Q_ENDPOINTS = {
 };
 const KIRO_MAX_TOOL_NAME_LENGTH = 64;
 const KIRO_MAX_TOOL_DESCRIPTION_LENGTH = 9216;
+const CLAUDE_PERSISTED_OUTPUT_TAG = '<persisted-output>';
+const CLAUDE_PERSISTED_OUTPUT_PATH_RE = /Full output saved to:\s*(.+?)(?:\r?\n|$)/;
+const CLAUDE_PERSISTED_OUTPUT_MAX_CHARS = 128 * 1024;
 let kiroThrottleQueue = Promise.resolve();
 let kiroLastRequestStartedAt = 0;
 
@@ -572,6 +575,42 @@ function appendKiroTextContent(existing, addition) {
     return /\s$/.test(existing) || /^\s/.test(text)
         ? `${existing}${text}`
         : `${existing}\n${text}`;
+}
+
+function isClaudePersistedOutputPath(filePath) {
+    const normalized = path.normalize(String(filePath || ''));
+    const parts = normalized.split(/[\\/]+/).map(part => part.toLowerCase());
+    const claudeIndex = parts.lastIndexOf('.claude');
+    const projectsIndex = parts.lastIndexOf('projects');
+    const toolResultsIndex = parts.lastIndexOf('tool-results');
+    const fileName = parts[parts.length - 1] || '';
+    if (
+        claudeIndex === -1
+        || projectsIndex === -1
+        || toolResultsIndex === -1
+        || !(claudeIndex < projectsIndex && projectsIndex < toolResultsIndex && toolResultsIndex < parts.length - 1)
+    ) {
+        return false;
+    }
+    return /^tooluse_.+\.txt$/.test(fileName);
+}
+
+function getClaudePersistedOutputPath(text) {
+    const rawText = String(text || '');
+    if (!rawText.includes(CLAUDE_PERSISTED_OUTPUT_TAG)) {
+        return null;
+    }
+
+    const match = rawText.match(CLAUDE_PERSISTED_OUTPUT_PATH_RE);
+    if (!match) {
+        return null;
+    }
+
+    const filePath = match[1].trim();
+    if (!filePath || !isClaudePersistedOutputPath(filePath)) {
+        return null;
+    }
+    return filePath;
 }
 
 function removeEmptyObjectField(owner, fieldName) {
@@ -1537,7 +1576,33 @@ async saveCredentialsToFile(filePath, newData, currentRefreshToken = this.refres
         return getContentTextUtil(message);
     }
 
-    _extractTextAndImagesFromContent(content, totalMessages = null) {
+    async _resolveToolResultText(content) {
+        const text = this.getContentText(content);
+        const filePath = getClaudePersistedOutputPath(text);
+        if (!filePath) {
+            return text;
+        }
+
+        try {
+            const fileContent = await fs.readFile(filePath, 'utf8');
+            if (fileContent.length <= CLAUDE_PERSISTED_OUTPUT_MAX_CHARS) {
+                logger.info(`[Kiro] Expanded Claude Code persisted tool output from ${filePath} (${fileContent.length} chars)`);
+                return fileContent;
+            }
+
+            logger.warn(`[Kiro] Claude Code persisted tool output exceeds ${CLAUDE_PERSISTED_OUTPUT_MAX_CHARS} chars, truncating: ${filePath}`);
+            return `${fileContent.slice(0, CLAUDE_PERSISTED_OUTPUT_MAX_CHARS)}
+
+[AIClient2API notice: Claude Code persisted tool output was truncated after ${CLAUDE_PERSISTED_OUTPUT_MAX_CHARS} characters. Full output remains at ${filePath}.]`;
+        } catch (error) {
+            logger.warn(`[Kiro] Failed to expand Claude Code persisted tool output from ${filePath}: ${error.message}`);
+            return `[AIClient2API notice: Tool output was persisted by Claude Code, but the proxy could not read the full output file at ${filePath}. Use an available file-read tool to inspect that file before relying on the preview.]
+
+${text}`;
+        }
+    }
+
+    async _extractTextAndImagesFromContent(content, totalMessages = null) {
         const result = { text: '', images: [], imageCount: 0 };
         const shouldKeepImages = totalMessages === null ? true : (totalMessages - 1) <= 5;
         if (Array.isArray(content)) {
@@ -1563,7 +1628,7 @@ async saveCredentialsToFile(filePath, newData, currentRefreshToken = this.refres
                     }
                 } else if (part.type === 'tool_result') {
                     result.text = appendKiroTextContent(result.text, formatToolResultAsText({
-                        content: [{ text: this.getContentText(part.content) }],
+                        content: [{ text: await this._resolveToolResultText(part.content) }],
                         status: 'success',
                         toolUseId: part.tool_use_id
                     }));
@@ -1830,7 +1895,7 @@ async saveCredentialsToFile(filePath, newData, currentRefreshToken = this.refres
             if (processedMessages[0].role === 'user' && processedMessages.length === 1) {
                 prependSystemToCurrentMessage = true;
             } else if (processedMessages[0].role === 'user') {
-                const firstUserPayload = this._extractTextAndImagesFromContent(processedMessages[0].content, processedMessages.length);
+                const firstUserPayload = await this._extractTextAndImagesFromContent(processedMessages[0].content, processedMessages.length);
                 const firstImagePlaceholder = firstUserPayload.imageCount > 0 && firstUserPayload.images.length === 0
                     ? `[此消息包含 ${firstUserPayload.imageCount} 张图片，已在历史记录中省略]`
                     : '';
@@ -1886,7 +1951,7 @@ async saveCredentialsToFile(filePath, newData, currentRefreshToken = this.refres
                             userInputMessage.content = appendKiroTextContent(userInputMessage.content, part.text);
                         } else if (part.type === 'tool_result') {
                             const toolResult = {
-                                content: [{ text: this.getContentText(part.content) }],
+                                content: [{ text: await this._resolveToolResultText(part.content) }],
                                 status: 'success',
                                 toolUseId: part.tool_use_id
                             };
@@ -2051,7 +2116,7 @@ async saveCredentialsToFile(filePath, newData, currentRefreshToken = this.refres
                         currentContent = appendKiroTextContent(currentContent, part.text);
                     } else if (part.type === 'tool_result') {
                         const toolResult = {
-                            content: [{ text: this.getContentText(part.content) }],
+                            content: [{ text: await this._resolveToolResultText(part.content) }],
                             status: 'success',
                             toolUseId: part.tool_use_id
                         };

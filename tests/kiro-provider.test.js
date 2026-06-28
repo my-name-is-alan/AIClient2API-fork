@@ -845,6 +845,85 @@ describe('KiroApiService request building', () => {
         ]);
     });
 
+    test('expands Claude Code persisted tool output before sending tool_result to Kiro', async () => {
+        const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kiro-persisted-output-'));
+        const toolResultsDir = path.join(tempDir, '.claude', 'projects', 'test-session', 'tool-results');
+        const outputFile = path.join(toolResultsDir, 'tooluse_1.txt');
+        const missingWindowsPath = 'C:\\Users\\Administrator\\.claude\\projects\\test-session\\tool-results\\tooluse_missing.txt';
+        try {
+            await fs.mkdir(toolResultsDir, { recursive: true });
+            await fs.writeFile(outputFile, 'full search result\nimportant final line');
+            const persistedOutput = `<persisted-output>
+Output too large (21.9KB). Full output saved to: ${outputFile}
+
+Preview (first 2KB):
+preview only
+</persisted-output>`;
+            const service = createInitializedKiroService({
+                service: {
+                    buildCodewhispererRequest: KiroApiService.prototype.buildCodewhispererRequest
+                }
+            });
+
+            const request = await service.buildCodewhispererRequest([
+                { role: 'user', content: 'search files' },
+                {
+                    role: 'assistant',
+                    content: [
+                        {
+                            type: 'tool_use',
+                            id: 'toolu_1',
+                            name: 'Grep',
+                            input: { pattern: 'streaming' }
+                        }
+                    ]
+                },
+                {
+                    role: 'user',
+                    content: [
+                        {
+                            type: 'tool_result',
+                            tool_use_id: 'toolu_1',
+                            content: persistedOutput
+                        }
+                    ]
+                }
+            ], 'claude-opus-4-8', [
+                {
+                    name: 'Grep',
+                    description: 'Search files',
+                    input_schema: {
+                        type: 'object',
+                        properties: {
+                            pattern: { type: 'string' }
+                        },
+                        required: ['pattern']
+                    }
+                }
+            ]);
+
+            const currentContext = request.conversationState.currentMessage.userInputMessage.userInputMessageContext;
+            const text = currentContext.toolResults[0].content[0].text;
+
+            expect(text).toContain('full search result');
+            expect(text).toContain('important final line');
+            expect(text).not.toContain('preview only');
+            expect(text).not.toContain('<persisted-output>');
+
+            const unreadableText = await service._resolveToolResultText(`<persisted-output>
+Output too large (21.9KB). Full output saved to: ${missingWindowsPath}
+
+Preview (first 2KB):
+windows preview
+</persisted-output>`);
+
+            expect(unreadableText).toContain('could not read the full output file');
+            expect(unreadableText).toContain(missingWindowsPath);
+        } finally {
+            await fs.rm(tempDir, { recursive: true, force: true });
+        }
+    });
+
     test('downgrades tool history to text when Claude Code hook evaluator omits tool definitions', async () => {
         const service = createInitializedKiroService({
             service: {
