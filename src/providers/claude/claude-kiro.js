@@ -314,6 +314,16 @@ function createKiroIncompleteToolUseError(toolCall, reason) {
     return error;
 }
 
+function createKiroIncompleteStreamError(model, inputTokens = 0, outputTokens = 0) {
+    const error = new Error(`[Kiro] Upstream stream ended without completion marker for model ${model || 'unknown'} (input_tokens=${inputTokens}, output_tokens=${outputTokens})`);
+    error.name = 'KiroIncompleteStreamError';
+    error.code = 'KIRO_STREAM_INCOMPLETE';
+    error.status = 502;
+    error.shouldSwitchCredential = true;
+    error.skipErrorCount = true;
+    return error;
+}
+
 // Per-model context window sizes for accurate token estimation
 const MODEL_CONTEXT_TOKENS = {
     "claude-opus-4-8": 1000000,
@@ -1684,19 +1694,35 @@ ${text}`;
         return Math.min(value, KIRO_THINKING.MAX_BUDGET_TOKENS);
     }
 
+    _resolveForcedThinkingEffort() {
+        const raw = this.config?.KIRO_THINKING_EFFORT_FORCE;
+        if (typeof raw !== 'string') return null;
+        const v = raw.toLowerCase().trim();
+        return ['low', 'medium', 'high', 'xhigh', 'max'].includes(v) ? v : null;
+    }
+
     _generateThinkingPrefix(thinking) {
         if (!thinking || typeof thinking !== 'object') return null;
         const type = String(thinking.type || '').toLowerCase().trim();
+        // 允许通过 KIRO_THINKING_EFFORT_FORCE 强制覆盖思考强度（含 max/xhigh）。
+        // 仅对已经请求思考的请求生效，避免给标题生成等轻量请求强加思考。
+        const forcedEffort = this._resolveForcedThinkingEffort();
 
         if (type === 'enabled') {
+            if (forcedEffort) {
+                return `<thinking_mode>adaptive</thinking_mode><thinking_effort>${forcedEffort}</thinking_effort>`;
+            }
             const budget = this._normalizeThinkingBudgetTokens(thinking.budget_tokens);
             return `<thinking_mode>enabled</thinking_mode><max_thinking_length>${budget}</max_thinking_length>`;
         }
 
         if (type === 'adaptive') {
+            if (forcedEffort) {
+                return `<thinking_mode>adaptive</thinking_mode><thinking_effort>${forcedEffort}</thinking_effort>`;
+            }
             const effortRaw = typeof thinking.effort === 'string' ? thinking.effort : '';
             const effort = effortRaw.toLowerCase().trim();
-            const normalizedEffort = (effort === 'low' || effort === 'medium' || effort === 'high') ? effort : 'high';
+            const normalizedEffort = ['low', 'medium', 'high', 'xhigh', 'max'].includes(effort) ? effort : 'high';
             return `<thinking_mode>adaptive</thinking_mode><thinking_effort>${normalizedEffort}</thinking_effort>`;
         }
 
@@ -2804,147 +2830,218 @@ ${text}`;
      * 解析 AWS Event Stream 格式，提取所有完整的 JSON 事件
      * 返回 { events: 解析出的事件数组, remaining: 未处理完的缓冲区 }
      */
-    parseAwsEventStreamBuffer(buffer) {
+    parseAwsEventStreamBuffer(input) {
+        // 字符串输入（单元测试 / 纯文本上游）：保持原有宽松扫描行为与返回类型（remaining 为 string）。
+        if (!Buffer.isBuffer(input)) {
+            return this._parseLooseJsonString(String(input ?? ''));
+        }
+        if (input.length === 0) {
+            return { events: [], remaining: input, ignoredEventCount: 0, ignoredSamples: [] };
+        }
+        // AWS Event Stream 二进制帧以 4 字节大端"总长度"开头，对任何 <16MB 的帧其高位字节恒为 0x00；
+        // 而 JSON/纯文本永远不以 0x00 开头。据此区分：真·Kiro 端点走严格按帧解析，文本上游走宽松扫描。
+        if (input[0] === 0x00) {
+            return this._parseEventStreamFrames(input);
+        }
+        const res = this._parseLooseJsonString(input.toString('utf8'));
+        return {
+            events: res.events,
+            remaining: Buffer.from(res.remaining, 'utf8'),
+            ignoredEventCount: res.ignoredEventCount,
+            ignoredSamples: res.ignoredSamples
+        };
+    }
+
+    /**
+     * 按 AWS Event Stream（vnd.amazon.eventstream）二进制帧协议精确切分：
+     *   [4B 总长度][4B headers 长度][4B prelude CRC][headers...][payload...][4B message CRC]
+     * 按帧长读取 payload，彻底避免"在字符串里找 {} 配对"在二进制头部 / 跨 chunk 边界处的丢帧、错切问题。
+     * payload 为 JSON，复用 _classifyKiroEventPayload 做事件识别。
+     */
+    _parseEventStreamFrames(buf) {
+        const events = [];
+        const ignoredSamples = [];
+        let ignoredEventCount = 0;
+        let offset = 0;
+        const PRELUDE_LEN = 12; // 4(total) + 4(headers) + 4(prelude CRC)
+        const MAX_FRAME = 16 * 1024 * 1024;
+
+        while (buf.length - offset >= PRELUDE_LEN) {
+            const totalLen = buf.readUInt32BE(offset);
+            const headersLen = buf.readUInt32BE(offset + 4);
+
+            // 合法性校验：帧最小 16 字节，headers 不能超过 total-16。
+            if (totalLen < 16 || totalLen > MAX_FRAME || headersLen > totalLen - 16) {
+                if (offset === 0) {
+                    // 起始处就不是合法帧：可能是非帧上游或数据异常，整体回退到宽松扫描。
+                    const res = this._parseLooseJsonString(buf.toString('utf8'));
+                    return {
+                        events: res.events,
+                        remaining: Buffer.from(res.remaining, 'utf8'),
+                        ignoredEventCount: res.ignoredEventCount,
+                        ignoredSamples: res.ignoredSamples
+                    };
+                }
+                // 已成功解析过若干帧后遇到异常边界：保留剩余字节等待更多数据，避免错切。
+                break;
+            }
+
+            // 帧未接收完整，保留剩余字节等待下一个 chunk。
+            if (buf.length - offset < totalLen) break;
+
+            const payloadStart = offset + PRELUDE_LEN + headersLen;
+            const payloadEnd = offset + totalLen - 4; // 去掉末尾 4 字节 message CRC
+            const payloadStr = buf.toString('utf8', payloadStart, payloadEnd);
+
+            const status = this._classifyKiroEventPayload(payloadStr, events, ignoredSamples);
+            if (status === 'ignored') ignoredEventCount++;
+            // 'parse-error'（payload 非 JSON，如初始响应 / 异常帧）与空对象一律忽略，不计数。
+
+            offset += totalLen;
+        }
+
+        const remaining = offset > 0 ? buf.slice(offset) : buf;
+        return { events, remaining, ignoredEventCount, ignoredSamples };
+    }
+
+    /**
+     * 宽松 JSON 扫描（兼容 ai-mirror 等非帧 / 文本上游，以及字符串输入的单元测试）。
+     * 在字符串里用括号配对提取完整 JSON 对象；remaining 返回 string。
+     */
+    _parseLooseJsonString(buffer) {
         const events = [];
         let remaining = buffer;
         let searchStart = 0;
         let ignoredEventCount = 0;
         const ignoredSamples = [];
-        
+
         while (true) {
-            // 查找真正的 JSON payload 起始位置。AWS Event Stream 包含二进制头部，
-            // payload 对象里的 key 顺序不稳定，所以不能依赖 {"input": 这类固定开头。
             const jsonStart = remaining.indexOf('{', searchStart);
             if (jsonStart < 0) break;
-            
-            // 正确处理嵌套的 {} - 使用括号计数法
+
             let braceCount = 0;
             let jsonEnd = -1;
             let inString = false;
             let escapeNext = false;
-            
+
             for (let i = jsonStart; i < remaining.length; i++) {
                 const char = remaining[i];
-                
-                if (escapeNext) {
-                    escapeNext = false;
-                    continue;
-                }
-                
-                if (char === '\\') {
-                    escapeNext = true;
-                    continue;
-                }
-                
-                if (char === '"') {
-                    inString = !inString;
-                    continue;
-                }
-                
+                if (escapeNext) { escapeNext = false; continue; }
+                if (char === '\\') { escapeNext = true; continue; }
+                if (char === '"') { inString = !inString; continue; }
                 if (!inString) {
                     if (char === '{') {
                         braceCount++;
                     } else if (char === '}') {
                         braceCount--;
-                        if (braceCount === 0) {
-                            jsonEnd = i;
-                            break;
-                        }
+                        if (braceCount === 0) { jsonEnd = i; break; }
                     }
                 }
             }
-            
+
             if (jsonEnd < 0) {
                 // 不完整的 JSON，保留在缓冲区等待更多数据
                 remaining = remaining.substring(jsonStart);
                 break;
             }
-            
+
             const jsonStr = remaining.substring(jsonStart, jsonEnd + 1);
-            try {
-                const parsed = JSON.parse(jsonStr);
-                // 处理 content 事件
-                if (parsed.content !== undefined && !parsed.followupPrompt) {
-                    // 处理转义字符
-                    let decodedContent = parsed.content;
-                    // 无须处理转义的换行符，原来要处理是因为智能体返回的 content 需要通过换行符切割不同的json
-                    // decodedContent = decodedContent.replace(/(?<!\\)\\n/g, '\n');
-                    events.push({ type: 'content', data: decodedContent });
-                }
-                // 处理以 `text` 字段承载的助手文本事件（新版 Kiro/Claude 模型如 claude-opus-4.8 使用此格式）
-                else if (typeof parsed.text === 'string' && !parsed.followupPrompt
-                    && parsed.name === undefined && parsed.toolUseId === undefined
-                    && parsed.input === undefined && parsed.stop === undefined
-                    && parsed.contextUsagePercentage === undefined) {
-                    events.push({ type: 'content', data: parsed.text });
-                }
-                // 处理结构化工具调用事件 - 开始事件（包含 name 和 toolUseId）
-                else if (parsed.name && parsed.toolUseId) {
-                    events.push({ 
-                        type: 'toolUse', 
-                        data: {
-                            name: parsed.name,
-                            toolUseId: parsed.toolUseId,
-                            input: normalizeKiroToolInput(parsed.input),
-                            stop: parsed.stop || false
-                        }
-                    });
-                }
-                // 处理工具调用的 input 续传事件（可能包含 toolUseId，且 key 顺序不固定）
-                else if (parsed.input !== undefined && !parsed.name) {
-                    events.push({
-                        type: 'toolUseInput',
-                        data: {
-                            toolUseId: parsed.toolUseId,
-                            input: normalizeKiroToolInput(parsed.input)
-                        }
-                    });
-                }
-                // 处理工具调用的结束事件（只有 stop 字段，且不包含 contextUsagePercentage）
-                else if (parsed.stop !== undefined && parsed.contextUsagePercentage === undefined) {
-                    events.push({
-                        type: 'toolUseStop',
-                        data: {
-                            toolUseId: parsed.toolUseId,
-                            stop: parsed.stop
-                        }
-                    });
-                }
-                // 处理上下文使用百分比事件（最后一条消息）
-                else if (parsed.contextUsagePercentage !== undefined) {
-                    events.push({
-                        type: 'contextUsage',
-                        data: {
-                            contextUsagePercentage: parsed.contextUsagePercentage
-                        }
-                    });
-                }
-                else if (parsed && Object.keys(parsed).length > 0) {
-                    ignoredEventCount++;
-                    logger.debug(`[Kiro] Ignoring unsupported upstream event keys: ${Object.keys(parsed).slice(0, 8).join(',')}`);
-                    if (ignoredSamples.length < 20) {
-                        ignoredSamples.push(jsonStr.length > 2000 ? jsonStr.slice(0, 2000) + '...(truncated)' : jsonStr);
-                    }
-                }
-            } catch (e) {
-                // JSON 解析失败，跳过这个 "{" 继续搜索，避免二进制头部中的偶然字符阻塞后续 payload
+            const status = this._classifyKiroEventPayload(jsonStr, events, ignoredSamples);
+            if (status === 'parse-error') {
+                // 跳过这个 "{" 继续搜索，避免二进制头部中的偶然字符阻塞后续 payload
                 searchStart = jsonStart + 1;
                 continue;
             }
-            
+            if (status === 'ignored') ignoredEventCount++;
+
             searchStart = jsonEnd + 1;
-            if (searchStart >= remaining.length) {
-                remaining = '';
-                break;
-            }
+            if (searchStart >= remaining.length) { remaining = ''; break; }
         }
-        
-        // 如果 searchStart 有进展，截取剩余部分
+
         if (searchStart > 0 && remaining.length > 0) {
             remaining = remaining.substring(searchStart);
         }
-        
+
         return { events, remaining, ignoredEventCount, ignoredSamples };
+    }
+
+    /**
+     * 识别单个 Kiro/CodeWhisperer payload JSON 并追加到 events。
+     * 返回：'event'（已识别）| 'ignored'（合法 JSON 但未知键，计入忽略并采样）
+     *      | 'skip'（合法但无键，静默跳过）| 'parse-error'（非 JSON，静默跳过）。
+     */
+    _classifyKiroEventPayload(jsonStr, events, ignoredSamples) {
+        let parsed;
+        try {
+            parsed = JSON.parse(jsonStr);
+        } catch (e) {
+            return 'parse-error';
+        }
+
+        if (parsed.content !== undefined && !parsed.followupPrompt) {
+            events.push({ type: 'content', data: parsed.content });
+            return 'event';
+        }
+        // 兼容 ai-mirror 等中间层输出的 text-only 助手文本 chunk。
+        if (typeof parsed.text === 'string' && !parsed.followupPrompt
+            && parsed.name === undefined && parsed.toolUseId === undefined
+            && parsed.input === undefined && parsed.stop === undefined
+            && parsed.contextUsagePercentage === undefined) {
+            events.push({ type: 'content', data: parsed.text });
+            return 'event';
+        }
+        // 工具调用开始事件（含 name 和 toolUseId）
+        if (parsed.name && parsed.toolUseId) {
+            events.push({
+                type: 'toolUse',
+                data: {
+                    name: parsed.name,
+                    toolUseId: parsed.toolUseId,
+                    input: normalizeKiroToolInput(parsed.input),
+                    stop: parsed.stop || false
+                }
+            });
+            return 'event';
+        }
+        // 工具调用 input 续传事件（可能含 toolUseId，且 key 顺序不固定）
+        if (parsed.input !== undefined && !parsed.name) {
+            events.push({
+                type: 'toolUseInput',
+                data: {
+                    toolUseId: parsed.toolUseId,
+                    input: normalizeKiroToolInput(parsed.input)
+                }
+            });
+            return 'event';
+        }
+        // 工具调用结束事件（只有 stop 字段，且不含 contextUsagePercentage）
+        if (parsed.stop !== undefined && parsed.contextUsagePercentage === undefined) {
+            events.push({
+                type: 'toolUseStop',
+                data: {
+                    toolUseId: parsed.toolUseId,
+                    stop: parsed.stop
+                }
+            });
+            return 'event';
+        }
+        // 上下文使用百分比事件（完成标记）
+        if (parsed.contextUsagePercentage !== undefined) {
+            events.push({
+                type: 'contextUsage',
+                data: { contextUsagePercentage: parsed.contextUsagePercentage }
+            });
+            return 'event';
+        }
+        // 合法 JSON 但未知键：计入忽略并采样
+        if (parsed && Object.keys(parsed).length > 0) {
+            logger.debug(`[Kiro] Ignoring unsupported upstream event keys: ${Object.keys(parsed).slice(0, 8).join(',')}`);
+            if (ignoredSamples.length < 20) {
+                ignoredSamples.push(jsonStr.length > 2000 ? jsonStr.slice(0, 2000) + '...(truncated)' : jsonStr);
+            }
+            return 'ignored';
+        }
+        return 'skip';
     }
 
     /**
@@ -2997,13 +3094,15 @@ ${text}`;
             const response = await this.axiosInstance.request(axiosConfig);
 
             stream = response.data;
-            let buffer = '';
+            let buffer = Buffer.alloc(0);
             let lastContentEvent = null;  // 用于检测连续重复的 content 事件
 
             for await (const chunk of stream) {
-                buffer += chunk.toString();
-                
-                // 解析缓冲区中的事件
+                // 以字节累积，避免 chunk.toString() 在多字节字符 / 二进制帧边界处被截断或破坏。
+                const chunkBuf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+                buffer = buffer.length === 0 ? chunkBuf : Buffer.concat([buffer, chunkBuf]);
+
+                // 解析缓冲区中的事件（按 AWS Event Stream 帧精确切分，remaining 为未接收完整的尾部字节）
                 const { events, remaining, ignoredEventCount: ignoredInChunk = 0, ignoredSamples: ignoredSamplesInChunk = [] } = this.parseAwsEventStreamBuffer(buffer);
                 buffer = remaining;
                 if (ignoredInChunk > 0) {
@@ -3142,6 +3241,105 @@ ${text}`;
             if (stream && typeof stream.destroy === 'function') {
                 stream.destroy();
             }
+        }
+    }
+
+    /**
+     * 在 streamApiReal 之上增加"截断流内部重试"能力。
+     *
+     * 背景：Kiro/CodeWhisperer 上游偶发地在只产出极少内容后就正常关闭 HTTP 流（提前 EOF），
+     * 既不抛网络异常（streamApiReal 的重试不触发），也不发送 contextUsagePercentage 完成标记。
+     * 旧逻辑会把它伪装成 end_turn；GPT 的修复改为抛错，但此时部分 delta 已经写给客户端，
+     * common.js 的换凭证重试因 "data already sent" 而无法生效，最终用户必然报错。
+     *
+     * 默认策略 "buffer-until-complete"（KIRO_BUFFER_UNTIL_COMPLETE !== false）：
+     *   在收到 contextUsagePercentage（完成标记）之前，缓冲所有事件、不向下游 yield。
+     *   - 收到标记 -> 一次性 flush 全部缓冲事件，得到完整响应。
+     *   - 上游在收到标记前就截断（流正常结束但无标记，即中途断流）-> 丢弃本次缓冲并重试整条上游请求。
+     *   由于截断前从未向客户端发送任何数据，重试始终安全，可真正恢复间歇性截断。
+     *   代价：失去逐字流式（响应一次性出现），换取截断可重试的可靠性。
+     *
+     * 可选 streaming 策略（KIRO_BUFFER_UNTIL_COMPLETE === false，保留首字延迟低的体验）：
+     *   累计内容超过 commitThreshold 字符或出现工具调用即"提交"并开始实时透传；
+     *   提交后才截断则无法重试，照常透传由下游回退估算。
+     *
+     * 两种策略下，"开头就截断"（提交前结束）都会触发整条请求的内部重试。
+     */
+    async * _streamKiroEventsWithRecovery(model, finalModel, requestBody) {
+        const configuredRetries = Number(this.config?.KIRO_INCOMPLETE_STREAM_MAX_RETRIES);
+        const maxRetries = Number.isFinite(configuredRetries) && configuredRetries >= 0 ? configuredRetries : 2;
+        const configuredThreshold = Number(this.config?.KIRO_STREAM_COMMIT_THRESHOLD);
+        const commitThreshold = Number.isFinite(configuredThreshold) && configuredThreshold > 0 ? configuredThreshold : 200;
+        // 默认缓冲到完成标记再发，以便中途截断时能透明重试；显式设为 false 可恢复实时流式。
+        const bufferUntilComplete = this.config?.KIRO_BUFFER_UNTIL_COMPLETE !== false;
+        const maxAttempts = maxRetries + 1;
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            const pending = [];
+            let committed = false;
+            let sawCompletion = false;
+            let sawToolUse = false;
+            let contentChars = 0;
+
+            const commitNow = function* () {
+                committed = true;
+                for (const e of pending) yield e;
+                pending.length = 0;
+            };
+
+            try {
+                for await (const event of this.streamApiReal('', finalModel, requestBody)) {
+                    if (event.type === 'contextUsage') sawCompletion = true;
+                    else if (event.type === 'content' && event.content) contentChars += event.content.length;
+                    else if (event.type === 'toolUse' || event.type === 'toolUseInput' || event.type === 'toolUseStop') sawToolUse = true;
+
+                    if (committed) {
+                        yield event;
+                        continue;
+                    }
+
+                    pending.push(event);
+                    // buffer-until-complete 模式：只有收到完成标记才提交（即全程缓冲，截断可重试）。
+                    // streaming 模式：内容达到阈值或出现工具调用即提交并实时透传。
+                    const shouldCommit = sawCompletion
+                        || (!bufferUntilComplete && (sawToolUse || contentChars >= commitThreshold));
+                    if (shouldCommit) {
+                        yield* commitNow();
+                    }
+                }
+            } catch (streamErr) {
+                // 上游在提交前抛出网络等异常：还没发送任何数据，可以安全重试整个请求
+                if (!committed && attempt < maxAttempts) {
+                    logger.warn(`[Kiro Stream] Upstream stream error before commit (attempt ${attempt}/${maxAttempts}): ${streamErr.message}; retrying upstream request`);
+                    continue;
+                }
+                throw streamErr;
+            }
+
+            // 上游流正常结束
+            if (sawCompletion) {
+                // 收到完成标记：若尚未提交（buffer-until-complete 或内容太短），这里补发全部缓冲事件
+                if (!committed) {
+                    for (const e of pending) yield e;
+                }
+                return;
+            }
+
+            // 没有收到完成标记
+            if (!committed) {
+                // 尚未向客户端发送任何数据 —— 中途/开头截断，重试整个上游请求
+                if (attempt < maxAttempts) {
+                    logger.warn(`[Kiro Stream] Upstream ended without completion marker before commit (attempt ${attempt}/${maxAttempts}, contentChars=${contentChars}); retrying upstream request`);
+                    continue;
+                }
+                // 重试用尽仍无完成标记：补发已缓冲内容（可能为空），交由下游回退估算/判定空响应
+                logger.warn(`[Kiro Stream] Upstream still incomplete after ${maxAttempts} attempt(s); flushing ${pending.length} buffered event(s) for downstream handling`);
+                for (const e of pending) yield e;
+                return;
+            }
+
+            // 已提交后才截断（仅 streaming 模式可能发生）：无法重试，由下游回退估算
+            return;
         }
     }
 
@@ -3358,7 +3556,9 @@ ${text}`;
             };
 
             // 2. 流式接收并发送每个 content_block_delta
-            for await (const event of this.streamApiReal('', finalModel, requestBody)) {
+            //    使用带"截断流内部重试"的包装器：上游若在提交前提前截断会被透明重试，
+            //    避免把瞬时上游截断变成用户可见的致命错误。
+            for await (const event of this._streamKiroEventsWithRecovery(model, finalModel, requestBody)) {
                 if (event.type === 'contextUsage' && event.contextUsagePercentage) {
                     // 捕获上下文使用百分比（包含输入和输出的总使用量）
                     contextUsagePercentage = event.contextUsagePercentage;
@@ -3587,13 +3787,20 @@ ${text}`;
                 }
             }
 
-            // 处理未完成的工具调用（如果流提前结束）
-            if (currentToolCall) {
-                throw createKiroIncompleteToolUseError(currentToolCall, 'stream ended before toolUseStop');
-            }
-            if (activeToolCalls.size > 0) {
-                const unfinishedToolCall = activeToolCalls.values().next().value;
-                throw createKiroIncompleteToolUseError(unfinishedToolCall, 'stream ended before toolUseStop');
+            // 处理未完成的工具调用（流提前结束，没收到 toolUseStop）。
+            // 工具的 content_block_start 与 input_json_delta 一直缓存在 pendingEvents 里，
+            // 只有 finishToolCall（toolUseStop 时）才会下发，所以此时客户端尚未看到这个工具块。
+            // 因此直接丢弃未完成的工具调用即可——既不会把半截 JSON 发给客户端，也不需要抛错中断。
+            // 后续会照常补 content_block_stop / message_delta / message_stop 做干净收尾（优雅包装不完整流）。
+            if (currentToolCall || activeToolCalls.size > 0) {
+                const incompleteNames = [
+                    currentToolCall?.name,
+                    ...Array.from(activeToolCalls.values()).map(t => t.name)
+                ].filter(Boolean);
+                const droppedCount = Math.max(activeToolCalls.size, currentToolCall ? 1 : 0);
+                logger.warn(`[Kiro Stream] Stream ended before toolUseStop; dropping ${droppedCount} incomplete tool call(s) [${incompleteNames.join(', ')}] and closing stream gracefully`);
+                activeToolCalls.clear();
+                currentToolCall = null;
             }
 
             if (thinkingRequested && (streamState.inThinking || streamState.buffer || streamState.pendingTextBeforeThinking)) {
@@ -3706,8 +3913,13 @@ ${text}`;
                 inputTokens = Math.max(0, totalTokens - outputTokens);
                 logger.info(`[Kiro] Token calculation from contextUsagePercentage: total=${totalTokens}, output=${outputTokens}, input=${inputTokens}`);
             } else {
-                logger.warn('[Kiro Stream] contextUsagePercentage not received, using estimation');
+                // contextUsagePercentage 在大量正常响应中并不出现（上游不稳定/中间层不透传），
+                // 它并不是可靠的完成标记。历史行为是回退到输入 token 估算并正常结束，这些响应大多可用。
+                // 一律抛错（GPT 的修复）会把高频的正常情况变成硬失败，导致整体不可用。
+                // 真正的空响应/仅 side-channel 已在上面的 hasSubstantiveOutput 分支被拦截，
+                // 早期截断也已由 _streamKiroEventsWithRecovery 透明重试，所以走到这里说明已有实质内容。
                 inputTokens = estimatedInputTokens;
+                logger.warn(`[Kiro Stream] contextUsagePercentage not received; falling back to estimated input tokens=${estimatedInputTokens} (output_tokens=${outputTokens})`);
             }
 
             // 4. 发送 message_delta 事件

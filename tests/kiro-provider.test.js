@@ -337,6 +337,21 @@ describe('KiroApiService token refresh guard', () => {
     });
 });
 
+describe('KiroApiService AWS event stream parsing', () => {
+    test('treats ai-mirror text-only chunks as content events', () => {
+        const service = createInitializedKiroService();
+
+        const result = service.parseAwsEventStreamBuffer('{"text":"I"}{"text":" am"}{"contextUsagePercentage":1}');
+
+        expect(result.ignoredEventCount).toBe(0);
+        expect(result.events).toEqual([
+            { type: 'content', data: 'I' },
+            { type: 'content', data: ' am' },
+            { type: 'contextUsage', data: { contextUsagePercentage: 1 } }
+        ]);
+    });
+});
+
 describe('KiroApiService streaming', () => {
     test('throws retryable error before message_start when upstream stream is truly empty', async () => {
         const service = createInitializedKiroService({
@@ -381,6 +396,31 @@ describe('KiroApiService streaming', () => {
             'Empty Kiro stream response',
             expect.objectContaining({ code: 'KIRO_EMPTY_RESPONSE' })
         );
+    });
+
+    test('falls back to end_turn when upstream stream omits the completion marker', async () => {
+        const service = createInitializedKiroService({
+            service: {
+                streamApiReal: jest.fn(async function* () {
+                    yield { type: 'content', content: 'I need to check files to' };
+                })
+            }
+        });
+
+        // contextUsagePercentage 在很多正常响应里本就不出现，缺失时回退到估算并正常结束，而不是报错。
+        const chunks = await collectStream(service.generateContentStream('claude-opus-4-8', {
+            messages: [{ role: 'user', content: 'hello' }]
+        }));
+
+        const messageDelta = chunks.find(chunk => chunk.type === 'message_delta');
+        const messageStop = chunks.find(chunk => chunk.type === 'message_stop');
+        expect(messageDelta).toBeTruthy();
+        expect(messageDelta.delta.stop_reason).toBe('end_turn');
+        expect(messageStop).toBeTruthy();
+        expect(chunks).toContainEqual(expect.objectContaining({
+            type: 'content_block_delta',
+            delta: { type: 'text_delta', text: 'I need to check files to' }
+        }));
     });
 
     test('rejects Kiro-only ignored hook activity before emitting an empty success stream', async () => {
@@ -472,7 +512,7 @@ describe('KiroApiService streaming', () => {
         expect(messageDelta.delta.stop_reason).toBe('tool_use');
     });
 
-    test('rejects unfinished streamed tool input before emitting any partial tool block', async () => {
+    test('drops unfinished streamed tool input and closes the stream gracefully', async () => {
         const service = createInitializedKiroService({
             service: {
                 streamApiReal: jest.fn(async function* () {
@@ -494,15 +534,20 @@ describe('KiroApiService streaming', () => {
             }
         });
 
-        const stream = service.generateContentStream('claude-opus-4-8', {
+        // 工具参数 JSON 在收到 toolUseStop 前一直被缓存、不下发；流提前结束时丢弃该未完成工具并干净收尾，
+        // 既不向客户端发送半截 JSON，也不抛错中断。
+        const chunks = await collectStream(service.generateContentStream('claude-opus-4-8', {
             messages: [{ role: 'user', content: 'write file' }],
             tools: [{ name: 'Write', input_schema: { type: 'object' } }]
-        });
+        }));
 
-        await expect(stream.next()).rejects.toMatchObject({
-            code: 'KIRO_TOOL_USE_INCOMPLETE',
-            status: 502
-        });
+        const toolStart = chunks.find(chunk => chunk.type === 'content_block_start' && chunk.content_block?.type === 'tool_use');
+        const toolDeltas = chunks.filter(chunk => chunk.type === 'content_block_delta' && chunk.delta?.type === 'input_json_delta');
+        const messageStop = chunks.find(chunk => chunk.type === 'message_stop');
+
+        expect(toolStart).toBeUndefined();
+        expect(toolDeltas).toHaveLength(0);
+        expect(messageStop).toBeTruthy();
     });
 });
 
