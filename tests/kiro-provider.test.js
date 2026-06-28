@@ -701,6 +701,44 @@ describe('KiroApiService request building', () => {
         expect(content).not.toContain('CRITICAL_OVERRIDE');
     });
 
+    test('moves inline system messages out of the Kiro conversation stream', async () => {
+        const service = createInitializedKiroService({
+            service: {
+                buildCodewhispererRequest: KiroApiService.prototype.buildCodewhispererRequest
+            }
+        });
+
+        const request = await service.buildCodewhispererRequest([
+            { role: 'user', content: 'hello' },
+            { role: 'system', content: 'SessionStart hook additional context' }
+        ], 'claude-opus-4-8');
+
+        const current = request.conversationState.currentMessage.userInputMessage;
+
+        expect(request.conversationState.history).toHaveLength(0);
+        expect(current.content).toBe('SessionStart hook additional context\n\nhello');
+    });
+
+    test('separates adjacent text blocks when building Kiro text content', async () => {
+        const service = createInitializedKiroService({
+            service: {
+                buildCodewhispererRequest: KiroApiService.prototype.buildCodewhispererRequest
+            }
+        });
+
+        const request = await service.buildCodewhispererRequest([
+            {
+                role: 'user',
+                content: [
+                    { type: 'text', text: 'first sentence.' },
+                    { type: 'text', text: 'second sentence.' }
+                ]
+            }
+        ], 'claude-opus-4-8');
+
+        expect(request.conversationState.currentMessage.userInputMessage.content).toBe('first sentence.\nsecond sentence.');
+    });
+
     test('drops hollow assistant history instead of adding Continue assistant turns', async () => {
         const service = createInitializedKiroService({
             service: {

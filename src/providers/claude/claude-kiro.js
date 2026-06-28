@@ -1688,10 +1688,18 @@ async saveCredentialsToFile(filePath, newData, currentRefreshToken = this.refres
         const conversationId = uuidv4();
         let systemPrompt = this.getContentText(inSystemPrompt);
         
-        const processedMessages = messages.map(message => ({
-            ...message,
-            content: Array.isArray(message.content) ? [...message.content] : message.content
-        }));
+        const processedMessages = [];
+        for (const message of messages) {
+            if (message?.role === 'system' || message?.role === 'developer') {
+                systemPrompt = appendKiroTextContent(systemPrompt, this.getContentText(message));
+                continue;
+            }
+
+            processedMessages.push({
+                ...message,
+                content: Array.isArray(message.content) ? [...message.content] : message.content
+            });
+        }
 
         if (processedMessages.length === 0) {
             throw new Error('No user messages found');
@@ -1733,7 +1741,7 @@ async saveCredentialsToFile(filePath, newData, currentRefreshToken = this.refres
                         lastMsg.content.push(...currentMsg.content);
                     } else if (typeof lastMsg.content === 'string' && typeof currentMsg.content === 'string') {
                         // 如果都是字符串,用换行符连接
-                        lastMsg.content += '\n' + currentMsg.content;
+                        lastMsg.content = appendKiroTextContent(lastMsg.content, currentMsg.content);
                     } else if (Array.isArray(lastMsg.content) && typeof currentMsg.content === 'string') {
                         // 上一条是数组,当前是字符串,添加为 text 类型
                         lastMsg.content.push({ type: 'text', text: currentMsg.content });
@@ -1875,7 +1883,7 @@ async saveCredentialsToFile(filePath, newData, currentRefreshToken = this.refres
                 if (Array.isArray(message.content)) {
                     for (const part of message.content) {
                         if (part.type === 'text') {
-                            userInputMessage.content += part.text;
+                            userInputMessage.content = appendKiroTextContent(userInputMessage.content, part.text);
                         } else if (part.type === 'tool_result') {
                             const toolResult = {
                                 content: [{ text: this.getContentText(part.content) }],
@@ -1945,7 +1953,7 @@ async saveCredentialsToFile(filePath, newData, currentRefreshToken = this.refres
                 if (Array.isArray(message.content)) {
                     for (const part of message.content) {
                         if (part.type === 'text') {
-                            assistantResponseMessage.content += part.text;
+                            assistantResponseMessage.content = appendKiroTextContent(assistantResponseMessage.content, part.text);
                         } else if (part.type === 'thinking') {
                             thinkingText += (part.thinking ?? part.text ?? '');
                         } else if (part.type === 'tool_use') {
@@ -2004,7 +2012,7 @@ async saveCredentialsToFile(filePath, newData, currentRefreshToken = this.refres
             if (Array.isArray(currentMessage.content)) {
                 for (const part of currentMessage.content) {
                     if (part.type === 'text') {
-                        assistantResponseMessage.content += part.text;
+                        assistantResponseMessage.content = appendKiroTextContent(assistantResponseMessage.content, part.text);
                     } else if (part.type === 'thinking') {
                         thinkingText += (part.thinking ?? part.text ?? '');
                     } else if (part.type === 'tool_use') {
@@ -2040,7 +2048,7 @@ async saveCredentialsToFile(filePath, newData, currentRefreshToken = this.refres
             if (Array.isArray(currentMessage.content)) {
                 for (const part of currentMessage.content) {
                     if (part.type === 'text') {
-                        currentContent += part.text;
+                        currentContent = appendKiroTextContent(currentContent, part.text);
                     } else if (part.type === 'tool_result') {
                         const toolResult = {
                             content: [{ text: this.getContentText(part.content) }],
