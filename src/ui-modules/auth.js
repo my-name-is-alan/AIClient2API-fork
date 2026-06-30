@@ -298,7 +298,7 @@ export async function cleanupExpiredTokens() {
 
 /**
  * 检查token验证
- * 支持 Authorization Header 或 URL 参数 token (用于 SSE)
+ * 支持 Authorization Header
  */
 export async function checkAuth(req) {
     let token = null;
@@ -308,17 +308,7 @@ export async function checkAuth(req) {
     if (authHeader && authHeader.startsWith('Bearer ')) {
         token = authHeader.substring(7);
     }
-    
-    // 2. 检查 URL 参数 (用于 EventSource/SSE)
-    if (!token && req.url) {
-        try {
-            const url = new URL(req.url, 'http://localhost');
-            token = url.searchParams.get('token');
-        } catch (e) {
-            // 解析失败忽略
-        }
-    }
-    
+
     if (!token) {
         return false;
     }

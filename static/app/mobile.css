@@ -869,39 +869,6 @@
         width: 100%;
     }
 
-    /* 日志容器 */
-    .logs-container {
-        height: calc(100vh - 280px);
-        min-height: 300px;
-        font-size: 0.6875rem;
-        padding: 0.625rem;
-        border-radius: var(--radius-lg);
-    }
-
-    .logs-controls {
-        flex-wrap: wrap;
-        gap: 0.5rem;
-        margin-bottom: 0.75rem;
-    }
-
-    .logs-controls .btn {
-        flex: 1;
-        min-width: 100px;
-        font-size: 0.75rem;
-    }
-
-    .log-entry {
-        padding: 0.375rem;
-        margin-bottom: 0.25rem;
-        font-size: 0.6875rem;
-        line-height: 1.4;
-        border-radius: var(--radius-sm);
-    }
-
-    .log-timestamp {
-        font-size: 0.625rem;
-    }
-
     /* Toast 通知 */
     .toast-container {
         left: 1rem;
@@ -1427,18 +1394,6 @@
         padding: 0.5rem 0.75rem;
     }
 
-    /* 日志 */
-    .logs-container {
-        font-size: 0.625rem;
-        padding: 0.5rem;
-        height: calc(100vh - 260px);
-    }
-
-    .log-entry {
-        padding: 0.3125rem;
-        font-size: 0.625rem;
-    }
-
     /* Toast */
     .toast {
         font-size: 0.75rem;
@@ -1531,11 +1486,6 @@
         padding: 0.375rem 0.625rem;
     }
 
-    .logs-container {
-        height: calc(100vh - 200px);
-        min-height: 200px;
-    }
-
     .provider-modal-content {
         max-height: 85vh;
     }
@@ -1592,7 +1542,6 @@
 
     /* 优化滚动 */
     .sidebar-nav,
-    .logs-container,
     .provider-modal-body {
         -webkit-overflow-scrolling: touch;
     }
@@ -1612,7 +1561,6 @@
     .header-controls,
     .sidebar,
     .form-actions,
-    .logs-controls,
     .provider-actions,
     .mobile-menu-toggle,
     .mobile-overlay {

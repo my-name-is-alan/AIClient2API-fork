@@ -69,7 +69,6 @@ export const API_GUIDE_DATA = [
         { method: 'POST',   path: '/api/config',                  desc: '动态更新系统配置' },
         { method: 'POST',   path: '/api/reload-config',           desc: '热加载配置文件' },
         { method: 'POST',   path: '/api/restart-service',         desc: '重启 Worker 服务进程' },
-        { method: 'GET',    path: '/api/events',                  desc: 'SSE 实时系统日志推送' },
         { method: 'GET',    path: '/api/system/download-log',     desc: '下载今日系统日志' },
         { method: 'POST',   path: '/api/system/clear-log',        desc: '清除今日运行日志' }
     ]},

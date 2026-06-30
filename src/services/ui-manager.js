@@ -20,7 +20,7 @@ import * as eventBroadcast from '../ui-modules/event-broadcast.js';
 import { HELP_DATA, API_GUIDE_DATA, API_EXAMPLES, formatHelpText, formatApiGuideText } from '../utils/docs-data.js';
 
 // Re-export from event-broadcast module
-export { broadcastEvent, initializeUIManagement, handleUploadOAuthCredentials, upload } from '../ui-modules/event-broadcast.js';
+export { broadcastEvent, handleUploadOAuthCredentials, upload } from '../ui-modules/event-broadcast.js';
 
 /**
  * Serve static files for the UI
@@ -266,11 +266,6 @@ export async function handleUIApiRequests(method, pathParam, req, res, currentCo
     // Handle manual OAuth callback
     if (method === 'POST' && pathParam === '/api/oauth/manual-callback') {
         return await oauthApi.handleManualOAuthCallback(req, res);
-    }
-
-    // Server-Sent Events for real-time updates
-    if (method === 'GET' && pathParam === '/api/events') {
-        return await eventBroadcast.handleEvents(req, res);
     }
 
     // Get upload configuration files list

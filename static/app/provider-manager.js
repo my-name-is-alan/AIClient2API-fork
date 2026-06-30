@@ -3915,24 +3915,6 @@ async function executeGenerateAuthUrl(providerType, extraOptions = {}) {
         );
         
         if (response.success && response.authUrl) {
-            // 如果提供了 targetInputId，设置成功监听器
-            if (extraOptions.targetInputId) {
-                const targetInputId = extraOptions.targetInputId;
-                const handleSuccess = (e) => {
-                    const data = e.detail;
-                    if (data.provider === providerType && data.relativePath) {
-                        const input = document.getElementById(targetInputId);
-                        if (input) {
-                            input.value = data.relativePath;
-                            input.dispatchEvent(new Event('input', { bubbles: true }));
-                            showToast(t('common.success'), t('modal.provider.auth.success'), 'success');
-                        }
-                        window.removeEventListener('oauth_success_event', handleSuccess);
-                    }
-                };
-                window.addEventListener('oauth_success_event', handleSuccess);
-            }
-
             // 显示授权信息模态框
             showAuthModal(response.authUrl, response.authInfo);
         } else {
@@ -4212,11 +4194,10 @@ function showAuthModal(authUrl, authInfo) {
                 clearInterval(pollTimer);
                 pollTimer = null;
             }
-            window.removeEventListener('oauth_success_event', handleOAuthSuccess);
             window.removeEventListener('message', handlePopupMessage);
         };
 
-        // 监听 OAuth 成功事件，自动关闭窗口和模态框
+        // OAuth 成功后自动关闭窗口和模态框
         const handleOAuthSuccess = () => {
             if (authWindow && !authWindow.closed) {
                 authWindow.close();
@@ -4247,7 +4228,6 @@ function showAuthModal(authUrl, authInfo) {
             handleOAuthSuccess();
         };
 
-        window.addEventListener('oauth_success_event', handleOAuthSuccess);
         window.addEventListener('message', handlePopupMessage);
         
         if (authWindow) {

@@ -79,16 +79,6 @@ function activateSection(sectionId, options = {}) {
         section.classList.remove('active');
         if (section.id === sectionId) {
             section.classList.add('active');
-            
-            // 如果是日志页面，默认滚动到底部
-            if (sectionId === 'logs') {
-                setTimeout(() => {
-                    const logsContainer = document.getElementById('logsContainer');
-                    if (logsContainer) {
-                        logsContainer.scrollTop = logsContainer.scrollHeight;
-                    }
-                }, 100);
-            }
         }
     });
 

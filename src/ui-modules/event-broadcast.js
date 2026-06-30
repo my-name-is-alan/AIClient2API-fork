@@ -1,147 +1,17 @@
-import { existsSync, readFileSync } from 'fs';
+import { existsSync } from 'fs';
 import { promises as fs } from 'fs';
 import path from 'path';
 import multer from 'multer';
 import logger from '../utils/logger.js';
 
-// Token存储到本地文件中
-const TOKEN_STORE_FILE = path.join(process.cwd(), 'configs', 'token-store.json');
-
-// 用量缓存文件路径
-const USAGE_CACHE_FILE = path.join(process.cwd(), 'configs', 'usage-cache.json');
-
 /**
- * Helper function to broadcast events to UI clients
- * @param {string} eventType - The type of event
- * @param {any} data - The data to broadcast
+ * Compatibility no-op for modules that used to announce optional UI updates.
+ * Realtime UI event streaming has been removed, so these calls intentionally do
+ * not open sockets or retain client state.
  */
 export function broadcastEvent(eventType, data) {
-    if (global.eventClients && global.eventClients.length > 0) {
-        const payload = typeof data === 'string' ? data : JSON.stringify(data);
-        global.eventClients.forEach(client => {
-            client.write(`event: ${eventType}\n`);
-            client.write(`data: ${payload}\n\n`);
-        });
-    }
-}
-
-/**
- * Server-Sent Events for real-time updates
- */
-export async function handleEvents(req, res) {
-    res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'Access-Control-Allow-Origin': '*'
-    });
-
-    try {
-        res.write('\n');
-    } catch (err) {
-        logger.error('[Event Broadcast] Failed to write initial data:', err.message);
-        return true;
-    }
-
-    // Store the response object for broadcasting
-    if (!global.eventClients) {
-        global.eventClients = [];
-    }
-    global.eventClients.push(res);
-
-    // Keep connection alive
-    const keepAlive = setInterval(() => {
-        if (!res.writableEnded && !res.destroyed) {
-            try {
-                res.write(':\n\n');
-            } catch (err) {
-                logger.error('[Event Broadcast] Failed to write keepalive:', err.message);
-                clearInterval(keepAlive);
-                global.eventClients = global.eventClients.filter(r => r !== res);
-            }
-        } else {
-            clearInterval(keepAlive);
-            global.eventClients = global.eventClients.filter(r => r !== res);
-        }
-    }, 30000);
-
-    req.on('close', () => {
-        clearInterval(keepAlive);
-        global.eventClients = global.eventClients.filter(r => r !== res);
-    });
-
-    return true;
-}
-
-/**
- * Initialize UI management features
- */
-export function initializeUIManagement() {
-    // Initialize log broadcasting for UI
-    if (!global.eventClients) {
-        global.eventClients = [];
-    }
-    if (!global.logBuffer) {
-        global.logBuffer = [];
-    }
-
-    // Override console.log to broadcast logs
-    const originalLog = console.log;
-    console.log = function(...args) {
-        originalLog.apply(console, args);
-        
-        let message = args.map(arg => {
-            if (typeof arg === 'string') return arg;
-            try {
-                return JSON.stringify(arg);
-            } catch (e) {
-                return String(arg);
-            }
-        }).join(' ');
-
-        // Strip server-side timestamp if present [YYYY-MM-DD HH:MM:SS.mmm]
-        message = message.replace(/^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\]\s*/, '');
-
-        const logEntry = {
-            timestamp: new Date().toISOString(),
-            level: 'info',
-            message: message
-        };
-        global.logBuffer.push(logEntry);
-        if (global.logBuffer.length > 100) {
-            global.logBuffer.shift();
-        }
-        broadcastEvent('log', logEntry);
-    };
-
-    // Override console.error to broadcast errors
-    const originalError = console.error;
-    console.error = function(...args) {
-        originalError.apply(console, args);
-        
-        let message = args.map(arg => {
-            if (typeof arg === 'string') return arg;
-            try {
-                return JSON.stringify(arg);
-            } catch (e) {
-                return String(arg);
-            }
-        }).join(' ');
-
-        // Strip server-side timestamp if present
-        message = message.replace(/^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\]\s*/, '');
-
-        const logEntry = {
-            timestamp: new Date().toISOString(),
-            level: 'error',
-            message: message
-        };
-        global.logBuffer.push(logEntry);
-        if (global.logBuffer.length > 100) {
-            global.logBuffer.shift();
-        }
-        broadcastEvent('log', logEntry);
-    };
+    void eventType;
+    void data;
 }
 
 // 配置multer中间件

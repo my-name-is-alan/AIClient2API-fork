@@ -30,12 +30,6 @@ import {
 } from './event-handlers.js';
 
 import {
-    initEventStream,
-    setProviderLoaders,
-    setConfigLoaders
-} from './event-stream.js';
-
-import {
     loadSystemInfo,
     updateTimeDisplay,
     loadProviders,
@@ -129,12 +123,6 @@ async function initApp() {
     // 设置reloadConfig函数
     setReloadConfig(reloadConfig);
     
-    // 设置提供商加载器
-    setProviderLoaders(loadProviders, refreshProviderConfig);
-    
-    // 设置配置加载器
-    setConfigLoaders(loadConfigList);
-
     setSectionLoaders({
         access: loadAccessInfo,
         config: loadConfiguration,
@@ -178,7 +166,6 @@ async function initApp() {
 
     // 初始化各个模块
     initEventListeners();
-    initEventStream();
     initFileUpload(); // 初始化文件上传功能
     initAccessManager(); // 初始化快速接入页面
     initUploadConfigManager(); // 初始化配置管理功能

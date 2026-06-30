@@ -3,7 +3,6 @@ import logger from '../utils/logger.js';
 import * as http from 'http';
 import { initializeConfig, CONFIG } from '../core/config-manager.js';
 import { initApiService, autoLinkProviderConfigs } from './service-manager.js';
-import { initializeUIManagement } from './ui-manager.js';
 import { initializeAPIManagement } from './api-manager.js';
 import { createRequestHandler } from '../handlers/request-handler.js';
 import { discoverPlugins, getPluginManager } from '../core/plugin-manager.js';
@@ -293,9 +292,6 @@ async function startServer() {
 
     // Initialize API services
     const services = await initApiService(CONFIG, true);
-    
-    // Initialize UI management features
-    initializeUIManagement(CONFIG);
     
     // Initialize API management and get heartbeat function
     const heartbeatAndRefreshToken = initializeAPIManagement(services);

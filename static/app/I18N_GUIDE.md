@@ -86,7 +86,6 @@ element.textContent = t('your.translation.key');
 - `providers.*` - 提供商相关
 - `upload.*` - 上传配置相关
 - `usage.*` - 用量查询相关
-- `logs.*` - 日志相关
 - `common.*` - 通用文本
 
 ## 已实现的功能

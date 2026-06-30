@@ -1,8 +1,4 @@
 // 全局变量
-let eventSource = null;
-let autoScroll = true;
-let logs = [];
-
 // 提供商统计全局变量
 let providerStats = {
     totalRequests: 0,
@@ -20,10 +16,6 @@ const elements = {
     get restartBtn() { return document.getElementById('restartBtn'); },
     get sections() { return document.querySelectorAll('.section'); },
     get navItems() { return document.querySelectorAll('.nav-item'); },
-    get logsContainer() { return document.getElementById('logsContainer'); },
-    get clearLogsBtn() { return document.getElementById('clearLogs'); },
-    get downloadLogsBtn() { return document.getElementById('downloadLogs'); },
-    get toggleAutoScrollBtn() { return document.getElementById('toggleAutoScroll'); },
     get saveConfigBtn() { return document.getElementById('saveConfig'); },
     get resetConfigBtn() { return document.getElementById('resetConfig'); },
     get toastContainer() { return document.getElementById('toastContainer'); },
@@ -37,30 +29,10 @@ const REFRESH_INTERVALS = {
 
 // 导出所有常量
 export {
-    eventSource,
-    autoScroll,
-    logs,
     providerStats,
     elements,
     REFRESH_INTERVALS
 };
-
-// 更新函数
-export function setEventSource(source) {
-    eventSource = source;
-}
-
-export function setAutoScroll(value) {
-    autoScroll = value;
-}
-
-export function addLog(log) {
-    logs.push(log);
-}
-
-export function clearLogs() {
-    logs = [];
-}
 
 export function updateProviderStats(newStats) {
     providerStats = { ...providerStats, ...newStats };

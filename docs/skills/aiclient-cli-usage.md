@@ -55,9 +55,6 @@ Force a specific provider by prefixing the AI business path:
 - `/gemini-cli-oauth/v1/chat/completions`
 - `/claude-custom/v1/messages`
 
-### Real-time Logs (SSE)
-Subscribe to `GET /api/events` via `EventSource` for live system output.
-
 ## Quick Reference
 
 | Mode | Method | Command/Endpoint | Format |

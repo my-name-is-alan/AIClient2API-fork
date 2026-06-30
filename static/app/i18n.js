@@ -33,7 +33,6 @@ const translations = {
         'nav.providers': '提供商池管理',
         'nav.upload': '凭据文件管理',
         'nav.usage': '用量查询',
-        'nav.logs': '实时日志',
         'nav.plugins': '插件管理',
         'nav.models': '可用模型',
         'nav.customModels': '自定义模型',
@@ -836,19 +835,6 @@ const translations = {
         'usage.codex.resetSuccess': 'Codex 额度重置成功',
         'usage.codex.resetConfirm': '确定要重置 {name} 的 Codex 额度吗？这会消耗 1 次可重置次数。',
         
-        // Logs
-        'logs.title': '实时日志',
-        'logs.clear': '清空日志',
-        'logs.download': '下载日志',
-        'logs.autoScroll': '自动滚动',
-        'logs.autoScroll.on': '自动滚动: 开',
-        'logs.autoScroll.off': '自动滚动: 关',
-        'logs.clear.confirm.title': '警告',
-        'logs.clear.confirm.msg': '此操作将清空当日的本地日志文件！\n\n• 前端页面的实时日志将被清空\n• 服务器上当日的日志文件也将被清空\n• 此操作不可恢复\n\n确定要继续吗？',
-        'logs.clear.success.title': '清空成功',
-        'logs.clear.success.msg': '前端实时日志和服务器当日日志文件已全部清空',
-        'logs.clear.failed': '清空日志失败',
-
         // Playground
         'playground.provider': '提供商',
         'playground.model': '模型',
@@ -1217,7 +1203,6 @@ const translations = {
         'nav.providers': 'Provider Pools',
         'nav.upload': 'Credential Files',
         'nav.usage': 'Usage Query',
-        'nav.logs': 'Real-time Logs',
         'nav.plugins': 'Plugin Management',
         'nav.models': 'Available Models',
         'nav.customModels': 'Custom Models',
@@ -2019,19 +2004,6 @@ const translations = {
         'usage.codex.resetSuccess': 'Codex quota reset succeeded',
         'usage.codex.resetConfirm': 'Reset Codex quota for {name}? This will consume 1 reset credit.',
         
-        // Logs
-        'logs.title': 'Real-time Logs',
-        'logs.clear': 'Clear Logs',
-        'logs.download': 'Download Logs',
-        'logs.autoScroll': 'Auto Scroll',
-        'logs.autoScroll.on': 'Auto Scroll: On',
-        'logs.autoScroll.off': 'Auto Scroll: Off',
-        'logs.clear.confirm.title': 'Warning',
-        'logs.clear.confirm.msg': 'This action will clear today\'s local log file!\n\n• Real-time logs on frontend will be cleared\n• Today\'s log file on server will also be cleared\n• This action cannot be undone\n\nAre you sure you want to continue?',
-        'logs.clear.success.title': 'Success',
-        'logs.clear.success.msg': 'Both real-time logs and today\'s log file on server have been cleared',
-        'logs.clear.failed': 'Failed to clear logs',
-
         // Playground
         'playground.provider': 'Provider',
         'playground.model': 'Model',
