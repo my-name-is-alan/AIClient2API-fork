@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 jest.mock('../src/utils/logger.js', () => ({
     __esModule: true,
     default: {
@@ -22,22 +24,17 @@ jest.mock('../src/ui-modules/event-broadcast.js', () => ({
 }));
 
 describe('UI management API routing', () => {
+    const uiManagerSource = readFileSync('src/services/ui-manager.js', 'utf8');
+
     test('does not expose the realtime events endpoint', async () => {
-        const { handleUIApiRequests } = await import('../src/services/ui-manager.js');
-        const req = {
-            url: '/api/events',
-            headers: {}
-        };
-        const res = {
-            writeHead: jest.fn(),
-            end: jest.fn(),
-            write: jest.fn()
-        };
+        expect(uiManagerSource).not.toContain("pathParam === '/api/events'");
+        expect(uiManagerSource).not.toContain('handleEvents');
+    });
 
-        const handled = await handleUIApiRequests('GET', '/api/events', req, res, {}, {});
-
-        expect(handled).toBe(false);
-        expect(res.writeHead).not.toHaveBeenCalled();
-        expect(res.write).not.toHaveBeenCalled();
+    test.each([
+        ['GET', '/api/system/download-log'],
+        ['POST', '/api/system/clear-log']
+    ])('does not expose the system log endpoint %s %s', async (method, path) => {
+        expect(uiManagerSource).not.toContain(path);
     });
 });

@@ -838,6 +838,10 @@ function normalizeKiroAuthMethod(authMethod) {
     return authMethod;
 }
 
+function shouldUseKiroProfileArn(authMethod, profileArn) {
+    return authMethod === KIRO_CONSTANTS.AUTH_METHOD_SOCIAL && !!profileArn;
+}
+
 function normalizeKiroCredentialObject(credentials) {
     if (!credentials || typeof credentials !== 'object' || Array.isArray(credentials)) {
         return null;
@@ -1264,7 +1268,7 @@ async loadCredentials() {
         if (this.config.KIRO_BASE_URL) {
             this.baseUrl = this.config.KIRO_BASE_URL.replace("{{region}}", this.region);
         } else if (isSocialAuth) {
-            this.baseUrl = KIRO_CONSTANTS.BASE_RUNTIME_URL.replace("{{region}}", this.region);
+            this.baseUrl = resolveKiroDefaultBaseUrl(this.region);
         } else {
             this.baseUrl = KIRO_Q_ENDPOINTS[this.region] || KIRO_CONSTANTS.BASE_URL.replace("{{region}}", this.region);
         }
@@ -1344,7 +1348,7 @@ async fetchAvailableModels(forceRefresh = false) {
     const params = new URLSearchParams({
         origin: KIRO_CONSTANTS.ORIGIN_AI_EDITOR
     });
-    if (this.authMethod === KIRO_CONSTANTS.AUTH_METHOD_SOCIAL && this.profileArn) {
+    if (shouldUseKiroProfileArn(this.authMethod, this.profileArn)) {
         params.append('profileArn', this.profileArn);
     }
 
@@ -2237,7 +2241,7 @@ ${text}`;
             logger.warn(`[Kiro] Downgraded ${downgradedToolBlocks} structured tool block(s) to text because no tool config is available.`);
         }
 
-        if (this.authMethod === KIRO_CONSTANTS.AUTH_METHOD_SOCIAL && this.profileArn) {
+        if (shouldUseKiroProfileArn(this.authMethod, this.profileArn)) {
             request.profileArn = this.profileArn;
         }
 
@@ -4262,7 +4266,7 @@ ${text}`;
             origin: KIRO_CONSTANTS.ORIGIN_AI_EDITOR,
             resourceType: resourceType
         });
-         if (this.authMethod === KIRO_CONSTANTS.AUTH_METHOD_SOCIAL && this.profileArn) {
+        if (shouldUseKiroProfileArn(this.authMethod, this.profileArn)) {
             params.append('profileArn', this.profileArn);
         }
         const fullUrl = `${usageLimitsUrl}?${params.toString()}`;

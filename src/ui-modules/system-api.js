@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, createReadStream } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import logger from '../utils/logger.js';
 import path from 'path';
 import { getCpuUsagePercent } from './system-monitor.js';
@@ -44,74 +44,6 @@ export async function handleGetSystem(req, res) {
         uptime: process.uptime()
     }));
     return true;
-}
-
-/**
- * 下载当日日志
- */
-export async function handleDownloadTodayLog(req, res) {
-    try {
-        if (!logger.currentLogFile || !existsSync(logger.currentLogFile)) {
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: { message: 'Today\'s log file not found' } }));
-            return true;
-        }
-
-        const fileName = path.basename(logger.currentLogFile);
-        res.writeHead(200, {
-            'Content-Type': 'text/plain',
-            'Content-Disposition': `attachment; filename="${fileName}"`
-        });
-
-        const readStream = createReadStream(logger.currentLogFile);
-        readStream.pipe(res);
-        return true;
-    } catch (error) {
-        logger.error('[UI API] Failed to download log:', error);
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: { message: 'Failed to download log: ' + error.message } }));
-        return true;
-    }
-}
-
-/**
- * 清空当日日志
- */
-export async function handleClearTodayLog(req, res) {
-    try {
-        const success = logger.clearTodayLog();
-        
-        if (success) {
-            // 广播日志清空事件
-            const { broadcastEvent } = await import('./event-broadcast.js');
-            broadcastEvent('log_cleared', {
-                action: 'log_cleared',
-                timestamp: new Date().toISOString(),
-                message: 'Today\'s log file has been cleared'
-            });
-            
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                success: true,
-                message: '当日日志已清空'
-            }));
-        } else {
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                success: false,
-                error: { message: '清空日志失败' }
-            }));
-        }
-        return true;
-    } catch (error) {
-        logger.error('[UI API] Failed to clear log:', error);
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-            success: false,
-            error: { message: 'Failed to clear log: ' + error.message }
-        }));
-        return true;
-    }
 }
 
 /**

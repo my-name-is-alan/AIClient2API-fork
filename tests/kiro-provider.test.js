@@ -613,6 +613,7 @@ describe('KiroApiService request building', () => {
             }
         });
         service.managementUrl = 'https://management.us-east-1.kiro.dev';
+        service.authMethod = 'social';
         service.profileArn = 'arn:aws:codewhisperer:us-east-1:123456789012:profile/test';
         service.axiosInstance.request = jest.fn(async () => ({
             data: {
@@ -640,6 +641,29 @@ describe('KiroApiService request building', () => {
             name: 'Claude Opus 4.8',
             maxInputTokens: 1000000
         });
+    });
+
+    test('does not send profileArn to model list endpoint for builder-id credentials', async () => {
+        const service = createInitializedKiroService({
+            service: {
+                fetchAvailableModels: KiroApiService.prototype.fetchAvailableModels
+            }
+        });
+        service.managementUrl = 'https://management.us-east-1.kiro.dev';
+        service.authMethod = 'builder-id';
+        service.profileArn = 'arn:aws:codewhisperer:us-east-1:123456789012:profile/test';
+        service.axiosInstance.request = jest.fn(async () => ({
+            data: {
+                models: []
+            }
+        }));
+
+        await service.fetchAvailableModels(true);
+        const request = service.axiosInstance.request.mock.calls[0][0];
+
+        expect(request.url).toContain('https://management.us-east-1.kiro.dev/ListAvailableModels?');
+        expect(request.url).toContain('origin=AI_EDITOR');
+        expect(request.url).not.toContain('profileArn=');
     });
 
     test('retries once with Kiro default model after INVALID_MODEL_ID', async () => {
@@ -695,13 +719,29 @@ describe('KiroApiService request building', () => {
         expect(userInput.userInputMessageContext.tools).toBeUndefined();
     });
 
-    test('includes profileArn whenever it is available', async () => {
+    test('does not include profileArn for builder-id credentials', async () => {
         const service = createInitializedKiroService({
             service: {
                 buildCodewhispererRequest: KiroApiService.prototype.buildCodewhispererRequest
             }
         });
         service.authMethod = 'builder-id';
+        service.profileArn = 'arn:aws:codewhisperer:us-east-1:123456789012:profile/test';
+
+        const request = await service.buildCodewhispererRequest([
+            { role: 'user', content: 'hello' }
+        ], 'claude-sonnet-4-5');
+
+        expect(request.profileArn).toBeUndefined();
+    });
+
+    test('includes profileArn for social credentials', async () => {
+        const service = createInitializedKiroService({
+            service: {
+                buildCodewhispererRequest: KiroApiService.prototype.buildCodewhispererRequest
+            }
+        });
+        service.authMethod = 'social';
         service.profileArn = 'arn:aws:codewhisperer:us-east-1:123456789012:profile/test';
 
         const request = await service.buildCodewhispererRequest([
